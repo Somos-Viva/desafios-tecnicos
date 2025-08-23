@@ -1,15 +1,15 @@
 [project]
-name = "flask-app"
+name = "desafio_1"
 version = "0.1.0"
-description = "Hello World in Flask"
+description = "Desafio 1 - Hello World em Flask e FastAPI"
 authors = [
-    {name = "Pedro Hirschle", email = "pedrohirschle@outlook.com"}
+    { name = "Pedro Hirschle", email = "pedrohirschle@outlook.com" }
 ]
-readme = "README.md"
-package-mode = false
 requires-python = "^3.12"
 dependencies = [
-    "flask (>=3.1.2,<4.0.0)"
+    "flask (>=3.1.2,<4.0.0)",
+    "fastapi (>=0.108.0,<0.110.0)",
+    "uvicorn[standard] (>=0.23.0,<0.25.0)"
 ]
 
 [build-system]
