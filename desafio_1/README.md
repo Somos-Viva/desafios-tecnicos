@@ -1,6 +1,6 @@
 # Desafio 1 - Flask e FastAPI
 
-Este projeto contém duas aplicações de servidor web, cada uma expondo um endpoint que retorna "Hello, World":
+Este projeto contém duas aplicações de servidor web, cada uma expondo um endpoint (`GET`) que retorna "Hello, World":
 
 - `flask_app` → servidor Flask
 - `fastapi_app` → servidor FastAPI
@@ -16,7 +16,9 @@ Este projeto contém duas aplicações de servidor web, cada uma expondo um endp
     ```bash
     poetry install
 ## Rodando o Projeto Flask
-- Acesse a pasta `desafio_1`
+- Acesse a pasta 'desafio_1'
+    ```bash
+    cd desafio_1
 - No terminal, insira:
     ```bash
     poetry run python -m flask_app.app
@@ -27,7 +29,9 @@ Este projeto contém duas aplicações de servidor web, cada uma expondo um endp
    curl http://localhost:5000/
    # Saída esperada: Hello, World
 ## Rodando o Projeto FastAPI
-- Acesse a pasta `desafio_1`
+- Acesse a pasta 'desafio_1'
+    ```bash
+    cd desafio_1
 - No terminal, insira:
     ```bash
     poetry run python -m fastapi_app
