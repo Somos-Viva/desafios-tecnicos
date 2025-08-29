@@ -227,51 +227,63 @@ CLONED=0; SKIPPED=0; PULLED=0
 
 # Process each fork
 while IFS=$'\t' read -r login name ssh_url https_url; do
-    [[ -z "$login" || -z "$name" ]] && continue
-    url="$(choose_url "$ssh_url" "$https_url")"
-    dest="$TARGET_DIR/${login}-${name}"
-    repo_link="https://github.com/${login}/${name}"
+  [[ -z "$login" || -z "$name" ]] && continue
+  url="$(choose_url "$ssh_url" "$https_url")"
+  dest="$TARGET_DIR/${login}-${name}"
+  repo_link="https://github.com/${login}/${name}"
 
-    if [[ -d "$dest/.git" ]]; then
-      echo "Already exists: $dest"
-      write_shortcuts "$dest" "$repo_link"
-      if [[ "$PULL_EXISTING" -eq 1 ]]; then
-        echo "Pulling latest in $dest"
-        if [[ "$USABLE_GH" -eq 1 ]]; then
-          if gh repo sync "$repo_link" -- -C "$dest" < /dev/null; then
-            echo -e "${login}\t${name}\tpulled-gh" >> "$TARGET_DIR/pulled.tsv"
-            ((PULLED++))
-          else
-            echo "WARN: gh repo sync failed in $dest"
-          fi
+  if [[ -d "$dest/.git" ]]; then
+    echo "Already exists: $dest"
+    write_shortcuts "$dest" "$repo_link"
+    if [[ "$PULL_EXISTING" -eq 1 ]]; then
+      echo "Pulling latest in $dest"
+      if [[ "$USABLE_GH" -eq 1 ]]; then
+        if gh repo sync "$repo_link" -- -C "$dest" < /dev/null; then
+          echo -e "${login}\t${name}\tpulled-gh" >> "$TARGET_DIR/pulled.tsv"
+          ((PULLED++))
         else
-          if git -C "$dest" pull --ff-only < /dev/null; then
-            echo -e "${login}\t${name}\tpulled-git" >> "$TARGET_DIR/pulled.tsv"
-            ((PULLED++))
-          else
-            echo "WARN: git pull failed in $dest"
-          fi
+          echo "WARN: gh repo sync failed in $dest"
         fi
       else
-        echo -e "${login}\t${name}\tskipped-existing" >> "$TARGET_DIR/skipped-existing.tsv"
-        ((SKIPPED++))
+        if git -C "$dest" pull --ff-only < /dev/null; then
+          echo -e "${login}\t${name}\tpulled-git" >> "$TARGET_DIR/pulled.tsv"
+          ((PULLED++))
+        else
+          echo "WARN: git pull failed in $dest"
+        fi
       fi
-      continue
-    fi
-
-    echo "Cloning $url -> $dest"
-    if git clone --quiet "$url" "$dest" < /dev/null; then
-        write_shortcuts "$dest" "$repo_link"
-        echo -e "${login}\t${name}\tcloned\t${url}" >> "$TARGET_DIR/cloned.tsv"
-        # Bash weirdness:
-        # This terminates the code if CLONED is initialized to zero.
-        # The expression returns the value before update,
-        # M]making set -euo pipefail trigger a stop.
-        # ((CLONED++))
-        ((CLONED=CLONED+1))
     else
-        echo "WARN: Failed to clone $url"
+      echo -e "${login}\t${name}\tskipped-existing" >> "$TARGET_DIR/skipped-existing.tsv"
+      ((SKIPPED++))
     fi
+    continue
+  fi
+
+  echo "Cloning $url -> $dest"
+  if [[ "$USABLE_GH" -eq 1 ]]; then
+    if gh repo clone "$repo_link" "$dest" -- --quiet < /dev/null; then
+      write_shortcuts "$dest" "$repo_link"
+      echo -e "${login}\t${name}\tcloned-gh\t${url}" >> "$TARGET_DIR/cloned.tsv"
+      ((CLONED=CLONED+1))
+    else
+      echo "WARN: gh repo clone failed for $repo_link, falling back to git clone"
+      if git clone --quiet "$url" "$dest" < /dev/null; then
+        write_shortcuts "$dest" "$repo_link"
+        echo -e "${login}\t${name}\tcloned-git\t${url}" >> "$TARGET_DIR/cloned.tsv"
+        ((CLONED=CLONED+1))
+      else
+        echo "WARN: Failed to clone $url"
+      fi
+    fi
+  else
+    if git clone --quiet "$url" "$dest" < /dev/null; then
+      write_shortcuts "$dest" "$repo_link"
+      echo -e "${login}\t${name}\tcloned-git\t${url}" >> "$TARGET_DIR/cloned.tsv"
+      ((CLONED=CLONED+1))
+    else
+      echo "WARN: Failed to clone $url"
+    fi
+  fi
 done < "$TEMP_FILE"
 
 ## Clean up temporary file
