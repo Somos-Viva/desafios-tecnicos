@@ -105,11 +105,15 @@ need() {
 }
 need curl jq git
 
-# Prefer gh's stored token; fallback to env var; else unauthenticated
+# ---------- soft dependency: gh ----------
+USABLE_GH=0
+TOKEN="${GITHUB_TOKEN:-}"
 if command -v gh >/dev/null 2>&1; then
-  TOKEN="$(gh auth token 2>/dev/null || true)"
-else
-  TOKEN="${GITHUB_TOKEN:-}"
+  if gh auth status >/dev/null 2>&1; then
+    USABLE_GH=1
+    # Prefer gh's stored token if USABLE_GH=1; fallback to env var; else unauthenticated
+    TOKEN="$(gh auth token 2>/dev/null || true)"
+  fi
 fi
 
 STAMP=$(date +"%Y%m%d-%H%M%S")
