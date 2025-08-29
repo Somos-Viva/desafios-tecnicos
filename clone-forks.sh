@@ -61,15 +61,52 @@ export GIT_TERMINAL_PROMPT=0
 export GIT_SSH_COMMAND='ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new'
 
 # ---------- parse flags (FIX: no bogus empty arg) ----------
+
 PULL_EXISTING=0
 PREFER_HTTPS=0
 SHOW_HELP=0
+OMIT_TIMESTAMP=0
+USER_TARGET_DIR=""
+
+# ---------- .env loader (KEY=VALUE, ignores comments/blank lines) ----------
+# This script checks if a .env file exists in the current directory.
+# If it does, it loads environment variables from the .env file.
+# For each non-empty, non-comment line in .env:
+#   - It splits the line into a key and value at the '=' character.
+#   - It strips surrounding single or double quotes from the value.
+#   - It exports the key-value pair as an environment variable.
+if [[ -f ".env" ]]; then
+  echo "Loading environment from .env"
+  while IFS='=' read -r key value; do
+    [[ -z "${key}" || "${key}" =~ ^\s*# ]] && continue
+    value="${value%\"}"; value="${value#\"}"
+    value="${value%\'}"; value="${value#\'}"
+    export "${key}"="${value}"
+  done < .env
+fi
+
+# Parses command-line options for the clone-forks.sh script.
+# Supported options:
+#   --pull-existing    : If specified, enables pulling updates for existing repositories.
+#   --https            : If specified, prefers cloning repositories using HTTPS instead of SSH.
+#   --help             : If specified, displays usage information.
+#   --omit-timestamp   : If specified, omits timestamps from output or logs.
+#   --target-dir <dir> : Specifies the target directory for cloning repositories. Requires a directory argument.
+# Any unknown option will result in an error message and script termination.
 if [[ $# -gt 0 ]]; then
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --pull-existing) PULL_EXISTING=1; shift ;;
       --https)         PREFER_HTTPS=1; shift ;;
       --help)          SHOW_HELP=1; shift ;;
+      --omit-timestamp) OMIT_TIMESTAMP=1; shift ;;
+      --target-dir)
+        if [[ -n "${2:-}" && ! "${2:-}" =~ ^-- ]]; then
+          USER_TARGET_DIR="$2"; shift 2;
+        else
+          echo "Error: --target-dir requires a directory argument" >&2; exit 2;
+        fi
+        ;;
       *) echo "Unknown option: $1" >&2; echo "Use --help for usage information" >&2; exit 2 ;;
     esac
   done
@@ -79,17 +116,6 @@ fi
 if [[ $SHOW_HELP -eq 1 ]]; then
   show_help
   exit 0
-fi
-
-# ---------- .env loader (KEY=VALUE, ignores comments/blank lines) ----------
-if [[ -f ".env" ]]; then
-  echo "Loading environment from .env"
-  while IFS='=' read -r key value; do
-    [[ -z "${key}" || "${key}" =~ ^\s*# ]] && continue
-    value="${value%\"}"; value="${value#\"}"
-    value="${value%\'}"; value="${value#\'}"
-    export "${key}"="${value}"
-  done < .env
 fi
 
 # ---------- self-checks ----------
@@ -116,8 +142,16 @@ if command -v gh >/dev/null 2>&1; then
   fi
 fi
 
-STAMP=$(date +"%Y%m%d-%H%M%S")
-TARGET_DIR="forks-$STAMP"
+
+# Determine TARGET_DIR based on switches
+if [[ -n "$USER_TARGET_DIR" ]]; then
+  TARGET_DIR="$USER_TARGET_DIR"
+elif [[ $OMIT_TIMESTAMP -eq 1 ]]; then
+  TARGET_DIR="forks"
+else
+  STAMP=$(date +"%Y%m%d-%H%M%S")
+  TARGET_DIR="forks-$STAMP"
+fi
 mkdir -p "$TARGET_DIR"
 
 LOG="$TARGET_DIR/clone-forks.log"
@@ -135,7 +169,106 @@ else
   echo "Note: No token found (gh/GITHUB_TOKEN). You may hit rate limits."
 fi
 
-# ---------- helpers ----------
+: '
+repository_clone() - Clone a GitHub repository using either the GitHub CLI (gh) or git.
+
+Arguments:
+  $1 - repo_link: The repository identifier for gh (e.g., "owner/repo").
+  $2 - url: The full HTTPS or SSH URL to the repository (for git clone).
+  $3 - dest: The destination directory to clone the repository into.
+
+Behavior:
+  - If the global variable USABLE_GH is set to 1, attempts to clone using "gh repo clone".
+    - On success, prints "success:gh:<output>" and returns 0.
+    - On failure, falls back to "git clone".
+      - On success, prints "success:git:<output>" and returns 0.
+      - On failure, prints "fail:both:<gh_output> | <git_output>" and returns 1.
+  - If USABLE_GH is not 1, attempts to clone using "git clone" only.
+    - On success, prints "success:git:<output>" and returns 0.
+    - On failure, prints "fail:git:<output>" and returns 1.
+
+All command output is captured and printed as part of the status message.
+'
+repository_clone() {
+  local repo_link="$1" url="$2" dest="$3" out status
+  if [[ "$USABLE_GH" -eq 1 ]]; then
+    out=$(gh repo clone "$repo_link" "$dest" -- --quiet < /dev/null 2>&1)
+    status=$?
+    if [[ $status -eq 0 ]]; then
+      echo "success:gh:$out"
+      return 0
+    else
+      # Try fallback to git clone
+      out2=$(git clone --quiet "$url" "$dest" < /dev/null 2>&1)
+      status2=$?
+      if [[ $status2 -eq 0 ]]; then
+        echo "success:git:$out2"
+        return 0
+      else
+        echo "fail:both:$out | $out2"
+        return 1
+      fi
+    fi
+  else
+    out=$(git clone --quiet "$url" "$dest" < /dev/null 2>&1)
+    status=$?
+    if [[ $status -eq 0 ]]; then
+      echo "success:git:$out"
+      return 0
+    else
+      echo "fail:git:$out"
+      return 1
+    fi
+  fi
+}
+
+# repo_sync
+# -----------
+# Synchronizes a local git repository with its remote counterpart.
+#
+# Arguments:
+#   $1 - The repository link (for use with GitHub CLI).
+#   $2 - The destination directory of the local repository.
+#
+# Behavior:
+#   - If the environment variable USABLE_GH is set to 1, attempts to sync using GitHub CLI (`gh repo sync`).
+#   - Otherwise, falls back to using `git pull --ff-only` in the specified directory.
+#
+# Output:
+#   - On success, prints "success:gh:<output>" or "success:git:<output>" depending on the method used.
+#   - On failure, prints "fail:gh:<output>" or "fail:git:<output>".
+#
+# Returns:
+#   0 on success, 1 on failure.
+repo_sync() {
+  local repo_link="$1" dest="$2" status out
+  if [[ "$USABLE_GH" -eq 1 ]]; then
+    out=$(gh repo sync "$repo_link" -- -C "$dest" < /dev/null 2>&1)
+    status=$?
+    if [[ $status -eq 0 ]]; then
+      echo "success:gh:$out"
+      return 0
+    else
+      echo "fail:gh:$out"
+      return 1
+    fi
+  else
+    out=$(git -C "$dest" pull --ff-only < /dev/null 2>&1)
+    status=$?
+    if [[ $status -eq 0 ]]; then
+      echo "success:git:$out"
+      return 0
+    else
+      echo "fail:git:$out"
+      return 1
+    fi
+  fi
+}
+
+# Escapes special characters in a string for XML.
+# Replaces &, <, >, ", and ' with their corresponding XML entities.
+# Usage: xml_escape "string"
+# Example: xml_escape "5 < 6 & 7 > 3" outputs "5 &lt; 6 &amp; 7 &gt; 3"
 xml_escape() {
   local s="$1"
   s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"
@@ -143,6 +276,22 @@ xml_escape() {
   printf '%s' "$s"
 }
 
+# write_shortcuts
+# ---------------
+# Creates shortcut files pointing to a given repository URL in the specified destination directory.
+#
+# Arguments:
+#   $1 - dest: The destination directory where the shortcut files will be created.
+#   $2 - repo_link: The repository URL to be saved in the shortcut files.
+#
+# Behavior:
+#   - Writes the repository URL to a plain text file named REPO_URL.txt.
+#   - Creates a Windows Internet Shortcut (.url) file named REPO_URL.url with the repository URL and an icon reference.
+#   - Creates a macOS Webloc (.webloc) file named REPO_URL.webloc containing the repository URL in XML plist format.
+#   - Uses xml_escape to properly escape the URL for XML.
+#
+# Requirements:
+#   - The function xml_escape must be defined elsewhere in the script for proper XML escaping.
 write_shortcuts() {
   local dest="$1" repo_link="$2"
   printf '%s\n' "$repo_link" > "$dest/REPO_URL.txt"
@@ -165,6 +314,14 @@ EOF
 EOF
 }
 
+# choose_url: Selects and echoes either the SSH or HTTPS URL based on user preference.
+# Arguments:
+#   $1 - SSH URL string.
+#   $2 - HTTPS URL string.
+# Behavior:
+#   If the environment variable PREFER_HTTPS is set to 1 and a non-empty HTTPS URL is provided,
+#   the function echoes the HTTPS URL. Otherwise, it falls back to the SSH URL.
+#   If PREFER_HTTPS is not set to 1, it prefers the SSH URL if available, otherwise falls back to HTTPS.
 choose_url() {
   local ssh_url="$1" https_url="$2"
   if [[ "$PREFER_HTTPS" -eq 1 ]]; then
@@ -237,20 +394,19 @@ while IFS=$'\t' read -r login name ssh_url https_url; do
     write_shortcuts "$dest" "$repo_link"
     if [[ "$PULL_EXISTING" -eq 1 ]]; then
       echo "Pulling latest in $dest"
-      if [[ "$USABLE_GH" -eq 1 ]]; then
-        if gh repo sync "$repo_link" -- -C "$dest" < /dev/null; then
+      sync_result=$(repo_sync "$repo_link" "$dest")
+      sync_status=$?
+      sync_type="$(cut -d: -f2 <<< "$sync_result")"
+      if [[ $sync_status -eq 0 ]]; then
+        if [[ "$sync_type" == "gh" ]]; then
           echo -e "${login}\t${name}\tpulled-gh" >> "$TARGET_DIR/pulled.tsv"
-          ((PULLED++))
         else
-          echo "WARN: gh repo sync failed in $dest"
-        fi
-      else
-        if git -C "$dest" pull --ff-only < /dev/null; then
           echo -e "${login}\t${name}\tpulled-git" >> "$TARGET_DIR/pulled.tsv"
-          ((PULLED++))
-        else
-          echo "WARN: git pull failed in $dest"
         fi
+        ((PULLED++))
+      else
+        echo "WARN: repo sync failed in $dest ($sync_type)"
+        echo "$sync_result"
       fi
     else
       echo -e "${login}\t${name}\tskipped-existing" >> "$TARGET_DIR/skipped-existing.tsv"
@@ -260,29 +416,20 @@ while IFS=$'\t' read -r login name ssh_url https_url; do
   fi
 
   echo "Cloning $url -> $dest"
-  if [[ "$USABLE_GH" -eq 1 ]]; then
-    if gh repo clone "$repo_link" "$dest" -- --quiet < /dev/null; then
-      write_shortcuts "$dest" "$repo_link"
+  clone_result=$(repository_clone "$repo_link" "$url" "$dest")
+  clone_status=$?
+  clone_type="$(cut -d: -f2 <<< "$clone_result")"
+  if [[ $clone_status -eq 0 ]]; then
+    write_shortcuts "$dest" "$repo_link"
+    if [[ "$clone_type" == "gh" ]]; then
       echo -e "${login}\t${name}\tcloned-gh\t${url}" >> "$TARGET_DIR/cloned.tsv"
-      ((CLONED=CLONED+1))
     else
-      echo "WARN: gh repo clone failed for $repo_link, falling back to git clone"
-      if git clone --quiet "$url" "$dest" < /dev/null; then
-        write_shortcuts "$dest" "$repo_link"
-        echo -e "${login}\t${name}\tcloned-git\t${url}" >> "$TARGET_DIR/cloned.tsv"
-        ((CLONED=CLONED+1))
-      else
-        echo "WARN: Failed to clone $url"
-      fi
-    fi
-  else
-    if git clone --quiet "$url" "$dest" < /dev/null; then
-      write_shortcuts "$dest" "$repo_link"
       echo -e "${login}\t${name}\tcloned-git\t${url}" >> "$TARGET_DIR/cloned.tsv"
-      ((CLONED=CLONED+1))
-    else
-      echo "WARN: Failed to clone $url"
     fi
+    ((CLONED=CLONED+1))
+  else
+    echo "WARN: Failed to clone $url ($clone_type)"
+    echo "$clone_result"
   fi
 done < "$TEMP_FILE"
 
