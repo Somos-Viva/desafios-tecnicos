@@ -233,21 +233,30 @@ while IFS=$'\t' read -r login name ssh_url https_url; do
     repo_link="https://github.com/${login}/${name}"
 
     if [[ -d "$dest/.git" ]]; then
-        echo "Already exists: $dest"
-        write_shortcuts "$dest" "$repo_link"
-        if [[ "$PULL_EXISTING" -eq 1 ]]; then
-            echo "Pulling latest in $dest"
-            if git -C "$dest" pull --ff-only < /dev/null; then
-                echo -e "${login}\t${name}\tpulled" >> "$TARGET_DIR/pulled.tsv"
-                ((PULLED++))
-            else
-                echo "WARN: git pull failed in $dest"
-            fi
+      echo "Already exists: $dest"
+      write_shortcuts "$dest" "$repo_link"
+      if [[ "$PULL_EXISTING" -eq 1 ]]; then
+        echo "Pulling latest in $dest"
+        if [[ "$USABLE_GH" -eq 1 ]]; then
+          if gh repo sync "$repo_link" -- -C "$dest" < /dev/null; then
+            echo -e "${login}\t${name}\tpulled-gh" >> "$TARGET_DIR/pulled.tsv"
+            ((PULLED++))
+          else
+            echo "WARN: gh repo sync failed in $dest"
+          fi
         else
-            echo -e "${login}\t${name}\tskipped-existing" >> "$TARGET_DIR/skipped-existing.tsv"
-            ((SKIPPED++))
+          if git -C "$dest" pull --ff-only < /dev/null; then
+            echo -e "${login}\t${name}\tpulled-git" >> "$TARGET_DIR/pulled.tsv"
+            ((PULLED++))
+          else
+            echo "WARN: git pull failed in $dest"
+          fi
         fi
-        continue
+      else
+        echo -e "${login}\t${name}\tskipped-existing" >> "$TARGET_DIR/skipped-existing.tsv"
+        ((SKIPPED++))
+      fi
+      continue
     fi
 
     echo "Cloning $url -> $dest"
