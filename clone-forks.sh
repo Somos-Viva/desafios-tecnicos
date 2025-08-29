@@ -93,8 +93,17 @@ if [[ -f ".env" ]]; then
 fi
 
 # ---------- self-checks ----------
-need() { command -v "$1" >/dev/null 2>&1 || { echo "Missing dependency: $1" >&2; exit 1; }; }
-need curl; need jq; need git
+need() {
+  local missing=()
+  for dep in "$@"; do
+    command -v "$dep" >/dev/null 2>&1 || missing+=("$dep")
+  done
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "Missing dependencies: ${missing[*]}" >&2
+    exit 1
+  fi
+}
+need curl jq git
 
 # Prefer gh's stored token; fallback to env var; else unauthenticated
 if command -v gh >/dev/null 2>&1; then
