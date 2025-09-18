@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hora Local</title>
+    <style>
+        #hora {
+            font-size: 2em;
+            font-weight: bold;
+            color: black;
+            transition: color 0.3s;
+        }
+        #hora:hover {
+            color: blue;
+        }
+    </style>
+</head>
+<body>
+    <h1>Hora do seu computador:</h1>
+    <p id="hora"></p>
+
+    <script>
+        function atualizarHora() {
+            const agora = new Date();
+            document.getElementById("hora").textContent = agora.toLocaleTimeString();
+        }
+        setInterval(atualizarHora, 1000);
+        atualizarHora();
+    </script>
+</body>
+</html>
